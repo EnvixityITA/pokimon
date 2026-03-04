@@ -1,188 +1,134 @@
-from ursina import *
-import numpy as np
-import random
-import math
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Panzer III WWII - Web Version</title>
+  <style>
+    body { margin: 0; overflow: hidden; background: black; }
+    #hud {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: white;
+      font-family: Arial;
+      font-size: 20px;
+    }
+  </style>
+</head>
+<body>
 
-app = Ursina()
-window.title = "Panzer III - WWII Semi Realistic"
+<div id="hud">HP: 100</div>
 
-# =============================
-# TERRAIN CON RUMORE
-# =============================
+<script src="https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.min.js"></script>
 
-def generate_terrain(size=60, scale=4):
-    terrain_parent = Entity()
-    heights = {}
+<script>
+let scene = new THREE.Scene();
+let camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+let renderer = new THREE.WebGLRenderer();
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
 
-    for x in range(size):
-        for z in range(size):
-            height = np.sin(x * 0.2) * np.cos(z * 0.2) * 2
-            height += np.random.uniform(-0.3, 0.3)
+// LUCI
+const light = new THREE.DirectionalLight(0xffffff, 1);
+light.position.set(10,20,10);
+scene.add(light);
+scene.add(new THREE.AmbientLight(0x888888));
 
-            heights[(x, z)] = height
+// TERRENO
+const groundGeometry = new THREE.PlaneGeometry(200,200,50,50);
+groundGeometry.rotateX(-Math.PI/2);
 
-            Entity(
-                parent=terrain_parent,
-                model='cube',
-                scale=(1, 1, 1),
-                position=(x - size/2, height, z - size/2),
-                color=color.rgb(80, 120 + int(height*10), 80),
-                collider='box'
-            )
+for(let i=0;i<groundGeometry.attributes.position.count;i++){
+  let y = Math.sin(i*0.3)*2;
+  groundGeometry.attributes.position.setY(i,y);
+}
 
-    return terrain_parent, heights
+groundGeometry.computeVertexNormals();
 
-terrain, heightmap = generate_terrain()
+const groundMaterial = new THREE.MeshStandardMaterial({color:0x3e7f3e});
+const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+scene.add(ground);
 
-# =============================
-# BULLET (BALISTICA CON GRAVITÀ)
-# =============================
+// ===== PANZER III PROCEDURALE =====
+let tank = new THREE.Group();
+scene.add(tank);
 
-class Bullet(Entity):
-    def __init__(self, position, direction):
-        super().__init__(
-            model='sphere',
-            scale=0.2,
-            color=color.black,
-            position=position
-        )
-        self.velocity = direction * 25
-        self.gravity = Vec3(0, -9.8, 0)
-        self.lifetime = 5
+// Corpo
+let body = new THREE.Mesh(
+  new THREE.BoxGeometry(3,1,5),
+  new THREE.MeshStandardMaterial({color:0x777777})
+);
+tank.add(body);
 
-    def update(self):
-        self.velocity += self.gravity * time.dt
-        self.position += self.velocity * time.dt
-        self.lifetime -= time.dt
+// Torretta
+let turret = new THREE.Mesh(
+  new THREE.BoxGeometry(2,0.8,2),
+  new THREE.MeshStandardMaterial({color:0x555555})
+);
+turret.position.y = 1;
+tank.add(turret);
 
-        hit = self.intersects()
-        if hit.hit:
-            if hasattr(hit.entity, "hp"):
-                hit.entity.hp -= 40
-            destroy(self)
+// Cannone
+let barrel = new THREE.Mesh(
+  new THREE.BoxGeometry(0.3,0.3,4),
+  new THREE.MeshStandardMaterial({color:0x444444})
+);
+barrel.position.z = 3;
+turret.add(barrel);
 
-        if self.lifetime <= 0:
-            destroy(self)
+tank.position.y = 2;
 
-# =============================
-# TANK BASE
-# =============================
+camera.position.set(0,15,-25);
+camera.lookAt(tank.position);
 
-class Tank(Entity):
-    def __init__(self, position=(0,2,0), enemy=False):
-        super().__init__(position=position)
-        self.enemy = enemy
-        self.hp = 100
+// MOVIMENTO
+let keys = {};
+document.addEventListener("keydown", e => keys[e.key] = true);
+document.addEventListener("keyup", e => keys[e.key] = false);
 
-        # Corpo
-        self.body = Entity(parent=self,
-                           model='cube',
-                           scale=(2.5,0.7,4),
-                           color=color.rgb(100,100,100),
-                           collider='box')
+// PROIETTILI
+let bullets = [];
 
-        # Torretta
-        self.turret = Entity(parent=self,
-                             model='cube',
-                             scale=(1.5,0.5,1.5),
-                             y=0.8)
+function shoot(){
+  let bullet = new THREE.Mesh(
+    new THREE.SphereGeometry(0.3),
+    new THREE.MeshBasicMaterial({color:0x000000})
+  );
+  
+  bullet.position.copy(barrel.getWorldPosition(new THREE.Vector3()));
+  
+  let direction = new THREE.Vector3(0,0,1);
+  direction.applyQuaternion(turret.quaternion);
+  
+  bullet.velocity = direction.multiplyScalar(0.8);
+  
+  scene.add(bullet);
+  bullets.push(bullet);
+}
 
-        # Cannone
-        self.barrel = Entity(parent=self.turret,
-                             model='cube',
-                             scale=(0.2,0.2,2.5),
-                             z=1.8)
+document.addEventListener("click", shoot);
 
-        # Cingoli
-        Entity(parent=self, model='cube',
-               scale=(0.5,0.4,4),
-               x=-1.6, color=color.black)
+// LOOP
+function animate(){
+  requestAnimationFrame(animate);
 
-        Entity(parent=self, model='cube',
-               scale=(0.5,0.4,4),
-               x=1.6, color=color.black)
+  if(keys["w"]) tank.translateZ(0.5);
+  if(keys["s"]) tank.translateZ(-0.5);
+  if(keys["a"]) tank.rotation.y += 0.03;
+  if(keys["d"]) tank.rotation.y -= 0.03;
 
-        self.speed = 6
-        self.turn_speed = 60
+  bullets.forEach(b=>{
+    b.position.add(b.velocity);
+  });
 
-    def update(self):
-        if self.hp <= 0:
-            self.color = color.dark_gray
-            return
+  camera.position.x = tank.position.x;
+  camera.position.z = tank.position.z - 25;
+  camera.lookAt(tank.position);
 
-        if not self.enemy:
-            self.player_control()
-        else:
-            self.ai_behavior()
+  renderer.render(scene,camera);
+}
 
-    # ================= PLAYER =================
-    def player_control(self):
-        if held_keys['w']:
-            self.position += self.forward * time.dt * self.speed
-        if held_keys['s']:
-            self.position -= self.forward * time.dt * self.speed
-        if held_keys['a']:
-            self.rotation_y -= self.turn_speed * time.dt
-        if held_keys['d']:
-            self.rotation_y += self.turn_speed * time.dt
-
-        if mouse.world_point:
-            self.turret.look_at(mouse.world_point)
-
-    # ================= AI =================
-    def ai_behavior(self):
-        if player.hp <= 0:
-            return
-
-        self.look_at(player.position)
-        self.position += self.forward * time.dt * 3
-
-        self.turret.look_at(player.position)
-
-        if distance(self.position, player.position) < 25:
-            if random.random() < 0.01:
-                self.shoot()
-
-    def shoot(self):
-        if self.hp <= 0:
-            return
-
-        direction = self.barrel.forward
-        Bullet(self.barrel.world_position + direction*2, direction)
-
-# =============================
-# CREA GIOCATORI
-# =============================
-
-player = Tank(position=(0,3,0))
-enemy = Tank(position=(15,3,15), enemy=True)
-
-# =============================
-# CAMERA TERZA PERSONA
-# =============================
-
-camera.parent = player
-camera.position = (0, 10, -20)
-camera.rotation_x = 25
-
-# =============================
-# LUCI
-# =============================
-
-DirectionalLight(y=20, z=10, shadows=True)
-AmbientLight(color=color.rgba(100,100,100,0.4))
-
-# =============================
-# HUD
-# =============================
-
-hp_text = Text(text="HP: 100", position=(-0.85,0.45), scale=2)
-
-def update():
-    hp_text.text = f"HP: {int(player.hp)}"
-
-def input(key):
-    if key == 'space':
-        player.shoot()
-
-app.run()
+animate();
+</script>
+</body>
+</html>
